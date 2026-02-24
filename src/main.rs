@@ -8,14 +8,19 @@ fn main() {
         .read_line(&mut input)
         .expect("Did not enter a correct string");
 
-    let bytes = input.trim().as_bytes();
-    let mut state = [147u8; 64]; // Initial State
+    let mut bytes = input.trim().as_bytes().to_vec();
 
-    // Padding / Input-Länge einmischen
+    // fail-safe für leeren Input
+    if bytes.is_empty() {
+        bytes.push(0x00); // minimaler Dummy-Byte
+    }
+    let mut state = [147u8; 64]; // initial state
+
+    // padding / input length influence
     state[0] ^= bytes.len() as u8;
     state[1] ^= (bytes.len() >> 8) as u8;
 
-    // Block vorbereiten
+    // init block
     let mut block = [0u8; 64];
     let len = bytes.len().min(64);
     block[..len].copy_from_slice(&bytes[..len]);
@@ -61,7 +66,7 @@ fn main() {
         sbox.swap(i, j);
     }
 
-    // Haupt-Runden
+    // main rounds
     let extra_rounds = ((bytes[0].wrapping_add(bytes[bytes.len() - 1])) % 255) as usize % 1000;
     let num_rounds = 10_000 + extra_rounds;
     for _ in 0..num_rounds {
@@ -74,29 +79,31 @@ fn main() {
             state[i] ^= block[(i + 4) % len].rotate_left(3);
 
             let idx = ((i % len) ^ (len.wrapping_mul(state[i % len] as usize))) % 64;
-            let rot = ((block[idx] + sbox[idx as usize]) % 8) as u32 + 1;
+            let rot = (block[idx].wrapping_add(sbox[idx as usize]) % 8) as u32;
             state[i] = state[i].rotate_left(rot);
             state[i] ^= state[(i + 7) % state.len()].rotate_left(3);
 
-            // S-Box Substitution
+            // s-box substitution
             state[i] = sbox[state[i] as usize];
         }
 
         let mut indices: Vec<usize> = (0..state.len()).collect();
-        indices.reverse(); // simple Beispiel, echte Hashes nutzen komplexere Permutationen
+        indices.reverse();
         for &i in &indices {
             state[i] ^= state[(i + 3) % state.len()];
         }
 
         let mut salt = bytes[0]
-            .wrapping_add(bytes[bytes.len() - 1].wrapping_mul(sbox[bytes.len() - 1 as usize]))
+            .wrapping_add(
+                bytes[bytes.len() - 1].wrapping_mul(sbox[(bytes.len() - 1) % 256 as usize]),
+            )
             .rotate_left(3);
         for i in 0..state.len() {
             salt ^= salt.wrapping_mul(bytes[i.wrapping_add(bytes.len() - 1) % bytes.len()]);
             state[i] ^= salt.rotate_left((i % 8) as u32);
         }
 
-        // Final Mix innerhalb der Runde
+        // final mix
         for i in 0..state.len() {
             state[i] ^= state[(i + 3) % state.len()];
             state[i] = state[i].wrapping_add(state[(i + 5) % state.len()]);
@@ -110,14 +117,14 @@ fn main() {
         }
     }
 
-    // End-Mix mit Block
+    // end mixing
     for (s, b) in state.iter_mut().zip(block.iter()) {
         *s ^= *b;
-        *s = s.rotate_left(13);
+        *s = s.rotate_left(sbox[(*s & 0xff) as usize] as u32);
         *s = s.wrapping_add(*b).wrapping_mul(3) ^ *b;
     }
 
-    // Ausgabe als Hex-String
+    // print as hex value
     let hex_state: String = state.iter().map(|b| format!("{:02x}", b)).collect();
     println!("Zinc-LHA Hash: {}", hex_state);
 }
